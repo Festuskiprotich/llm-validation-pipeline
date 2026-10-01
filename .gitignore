@@ -1,0 +1,38 @@
+# Virtual environments
+.venv/
+venv/
+env/
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Environment variables (secrets)
+.env
+
+# Databases
+*.db
+*.sqlite
+*.sqlite3
+
+# Data files (large, domain-specific)
+data/source_of_truth/*
+!data/source_of_truth/.gitkeep
+data/golden_set/*
+!data/golden_set/.gitkeep
+
+# IDE
+.vscode/
+.idea/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
+logs/
