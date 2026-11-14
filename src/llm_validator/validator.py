@@ -1,6 +1,11 @@
 import re
+import json
 from pathlib import Path
 from llm_validator.llm_client import ask_ollama
+
+# =========================================================
+# 1. BASELINE: Keyword-based faithfulness (our first attempt)
+# =========================================================
 
 def load_source_of_truth(filepath: str) -> str:
     """Reads the truth document from the data folder."""
@@ -11,62 +16,121 @@ def load_source_of_truth(filepath: str) -> str:
 
 def extract_keywords(text: str) -> set:
     """Strips punctuation and returns a set of lowercase words."""
-    # Remove punctuation and split into words
     words = re.findall(r'\b\w+\b', text.lower())
-    # Ignore tiny common words like "is", "a", "the"
     stopwords = {"is", "a", "an", "the", "in", "of", "to", "and", "it", "they", "do", "not"}
     return {w for w in words if w not in stopwords and len(w) > 2}
 
 def calculate_faithfulness(llm_answer: str, truth_text: str) -> float:
-    """
-    A simple heuristic: What percentage of the LLM's keywords
-    actually appear in the source of truth?
-    """
+    """Baseline: What percentage of the LLM's keywords appear in the truth?"""
     answer_words = extract_keywords(llm_answer)
     truth_words = extract_keywords(truth_text)
-    
     if not answer_words:
         return 0.0
-        
-    # How many of the answer's words exist in the truth?
     overlap = answer_words.intersection(truth_words)
-    score = len(overlap) / len(answer_words)
-    return round(score, 2)
+    return round(len(overlap) / len(answer_words), 2)
+
+# =========================================================
+# 2. NEW: LLM-as-a-Judge (production-grade)
+# =========================================================
+
+JUDGE_PROMPT_TEMPLATE = """
+You are a strict fact-checker. Your job is to score how faithfully an AI's answer reflects a provided source of truth.
+
+SOURCE OF TRUTH:
+"{source}"
+
+AI'S ANSWER:
+"{answer}"
+
+Instructions:
+1. Read the source of truth carefully.
+2. Read the AI's answer.
+3. Rate how faithfully the AI's answer reflects the source of truth on a scale from 0.0 to 1.0.
+   - 1.0 = perfectly consistent, no hallucinations
+   - 0.5 = partially consistent, some unsupported claims
+   - 0.0 = contradicts the source or completely invented
+
+Respond with ONLY a JSON object, no other text:
+{{"score": <number>, "reasoning": "<one sentence>"}}
+"""
+
+def judge_with_llm(llm_answer: str, truth_text: str) -> dict:
+    """Uses a second LLM call to judge the first LLM's answer."""
+    prompt = JUDGE_PROMPT_TEMPLATE.format(source=truth_text, answer=llm_answer)
+    judge_result = ask_ollama(prompt)
+    raw = judge_result["answer"].strip()
+
+    # Try to parse the JSON the judge was instructed to return
+    try:
+        # Find the JSON object inside the response (in case the model adds text)
+        json_match = re.search(r'\{.*\}', raw, re.DOTALL)
+        if not json_match:
+            raise ValueError("No JSON found")
+        parsed = json.loads(json_match.group())
+        return {
+            "score": float(parsed["score"]),
+            "reasoning": parsed.get("reasoning", ""),
+            "latency": judge_result["latency_seconds"],
+        }
+    except Exception as e:
+        # Fallback: if the judge misbehaved, return a low-confidence result
+        return {
+            "score": 0.0,
+            "reasoning": f"Judge failed to parse: {e}. Raw output: {raw[:100]}",
+            "latency": judge_result["latency_seconds"],
+        }
+
+# =========================================================
+# 3. MAIN PIPELINE
+# =========================================================
 
 def validate_answer(question: str, truth_filepath: str) -> dict:
-    """The main pipeline: Ask LLM, load truth, score the answer."""
-    # 1. Ask the LLM
+    """Ask LLM, load truth, score with BOTH methods."""
     print(f"🤖 Asking LLM: '{question}'")
     llm_result = ask_ollama(question)
     answer = llm_result["answer"]
-    
-    # 2. Load the truth
+
     truth = load_source_of_truth(truth_filepath)
-    
-    # 3. Score it
-    print("⚖️  Validating against source of truth...")
-    score = calculate_faithfulness(answer, truth)
-    
+
+    print("🔍 Scoring with keyword matcher...")
+    keyword_score = calculate_faithfulness(answer, truth)
+
+    print("👨‍⚖️  Scoring with LLM-as-a-Judge (this takes longer)...")
+    judge_result = judge_with_llm(answer, truth)
+
     return {
         "answer": answer,
-        "faithfulness_score": score,
-        "latency": llm_result["latency_seconds"]
+        "keyword_score": keyword_score,
+        "judge_score": judge_result["score"],
+        "judge_reasoning": judge_result["reasoning"],
+        "latency_answer": llm_result["latency_seconds"],
+        "latency_judge": judge_result["latency"],
     }
 
-# This block runs when you execute the file
+# =========================================================
+# 4. ENTRYPOINT
+# =========================================================
+
 if __name__ == "__main__":
     TRUTH_FILE = "data/source_of_truth/llm_facts.txt"
     QUESTION = "What does LLM stand for, and who invented it in 1995?"
-    
-    print("--- STARTING VALIDATION PIPELINE ---\n")
+
+    print("--- STARTING DUAL-VALIDATION PIPELINE ---\n")
     result = validate_answer(QUESTION, TRUTH_FILE)
-    
+
     print("\n--- FINAL REPORT ---")
-    print(f"Answer: {result['answer'].strip()}")
-    print(f"Faithfulness Score: {result['faithfulness_score'] * 100}%")
-    print(f"Latency: {result['latency']}s")
-    
-    if result['faithfulness_score'] < 0.5:
-        print("\n⚠️  WARNING: Low faithfulness score. The LLM might be hallucinating!")
+    print(f"Answer: {result['answer'].strip()}\n")
+    print("━" * 60)
+    print(f"📊 Baseline (keyword matcher): {result['keyword_score'] * 100}%")
+    print(f"👨‍⚖️  LLM-as-a-Judge:           {result['judge_score'] * 100}%")
+    print(f"   Judge reasoning: {result['judge_reasoning']}")
+    print("━" * 60)
+    print(f"⏱️  Answer latency:  {result['latency_answer']}s")
+    print(f"⏱️  Judge latency:   {result['latency_judge']}s")
+    print(f"⏱️  Total latency:   {round(result['latency_answer'] + result['latency_judge'], 2)}s")
+    print("━" * 60)
+
+    if result['judge_score'] < 0.5:
+        print("\n⚠️  WARNING: LLM-as-a-Judge flagged this answer as hallucinated.")
     else:
-        print("\n✅ High faithfulness score. The answer aligns with the truth.")
+        print("\n✅ The judge confirmed this answer is faithful to the source.")
