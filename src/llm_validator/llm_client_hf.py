@@ -2,7 +2,7 @@ import os
 import time
 from groq import Groq
 
-def ask_hf(prompt: str, model: str = "llama-3.1-8b-instant") -> dict:
+def ask_hf(prompt: str, model: str = "openai/gpt-oss-20b") -> dict:
     """Uses Groq API instead of Hugging Face (much faster and more reliable)."""
     token = os.getenv("GROQ_API_KEY")
     if not token:
