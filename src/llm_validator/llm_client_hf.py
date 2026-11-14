@@ -1,21 +1,21 @@
 import os
 import time
-from huggingface_hub import InferenceClient
+from groq import Groq
 
-def ask_hf(prompt: str, model: str = "Qwen/Qwen2.5-7B-Instruct") -> dict:
-    """Uses Hugging Face Inference API instead of local Ollama."""
-    token = os.getenv("HF_TOKEN")
+def ask_hf(prompt: str, model: str = "llama-3.1-8b-instant") -> dict:
+    """Uses Groq API instead of Hugging Face (much faster and more reliable)."""
+    token = os.getenv("GROQ_API_KEY")
     if not token:
-        raise ValueError("HF_TOKEN environment variable is missing.")
+        raise ValueError("GROQ_API_KEY environment variable is missing.")
         
-    client = InferenceClient(model=model, token=token)
+    client = Groq(api_key=token)
     start_time = time.time()
     
-    # HF Inference API call
-    response = client.chat_completion(
+    response = client.chat.completions.create(
         messages=[{"role": "user", "content": prompt}],
-        max_tokens=500,
+        model=model,
         temperature=0.1,
+        max_tokens=500,
     )
     
     latency = time.time() - start_time
