@@ -1,0 +1,4 @@
+LLM stands for Large Language Model.
+It is a type of artificial intelligence trained on vast amounts of text data.
+LLMs are designed to predict the next word in a sequence.
+They do not have true understanding; they use statistical patterns.
