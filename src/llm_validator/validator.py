@@ -1,8 +1,9 @@
+from llm_validator.observability import get_stats
 import re
 import json
 from pathlib import Path
 from llm_validator.llm_client import ask_ollama
-
+from llm_validator.observability import log_validation
 # =========================================================
 # 1. BASELINE: Keyword-based faithfulness (our first attempt)
 # =========================================================
@@ -34,7 +35,7 @@ def calculate_faithfulness(llm_answer: str, truth_text: str) -> float:
 # =========================================================
 
 JUDGE_PROMPT_TEMPLATE = """
-You are a strict fact-checker. Your job is to score how faithfully an AI's answer reflects a provided source of truth.
+You are a fair fact-checker. Your job is to score whether an AI's answer CONTRADICTS a provided source of truth.
 
 SOURCE OF TRUTH:
 "{source}"
@@ -43,12 +44,10 @@ AI'S ANSWER:
 "{answer}"
 
 Instructions:
-1. Read the source of truth carefully.
-2. Read the AI's answer.
-3. Rate how faithfully the AI's answer reflects the source of truth on a scale from 0.0 to 1.0.
-   - 1.0 = perfectly consistent, no hallucinations
-   - 0.5 = partially consistent, some unsupported claims
-   - 0.0 = contradicts the source or completely invented
+1. Compare the AI's answer to the source of truth.
+2. If the AI's answer CONTRADICTS anything in the source, that is a hallucination. Score it LOW (0.0 - 0.3).
+3. If the AI's answer is CONSISTENT with the source, but adds additional correct context, that is NOT a hallucination. Score it HIGH (0.7 - 1.0).
+4. If the AI's answer partially agrees but includes some false claims, score it MID (0.4 - 0.6).
 
 Respond with ONLY a JSON object, no other text:
 {{"score": <number>, "reasoning": "<one sentence>"}}
@@ -98,6 +97,17 @@ def validate_answer(question: str, truth_filepath: str) -> dict:
     print("👨‍⚖️  Scoring with LLM-as-a-Judge (this takes longer)...")
     judge_result = judge_with_llm(answer, truth)
 
+
+    log_validation(
+        question=question,
+        answer=answer,
+        keyword_score=keyword_score,
+        judge_score=judge_result["score"],
+        judge_reasoning=judge_result["reasoning"],
+        answer_latency=llm_result["latency_seconds"],
+        judge_latency=judge_result["latency"],
+    )
+
     return {
         "answer": answer,
         "keyword_score": keyword_score,
@@ -113,7 +123,7 @@ def validate_answer(question: str, truth_filepath: str) -> dict:
 
 if __name__ == "__main__":
     TRUTH_FILE = "data/source_of_truth/llm_facts.txt"
-    QUESTION = "What does LLM stand for, and who invented it in 1995?"
+    QUESTION = "What does LLM stand for and how does it work?"
 
     print("--- STARTING DUAL-VALIDATION PIPELINE ---\n")
     result = validate_answer(QUESTION, TRUTH_FILE)
@@ -134,3 +144,10 @@ if __name__ == "__main__":
         print("\n⚠️  WARNING: LLM-as-a-Judge flagged this answer as hallucinated.")
     else:
         print("\n✅ The judge confirmed this answer is faithful to the source.")
+    print("\n📊 Recent validations in database:")
+    stats = get_stats()
+    print(f"   Total logged: {stats['total']}")
+    if stats['total'] > 0:
+        print(f"   Avg keyword score: {stats['avg_keyword_score']}")
+        print(f"   Avg judge score:   {stats['avg_judge_score']}")
+        print(f"   Hallucinations caught: {stats['hallucinations_caught']}")
