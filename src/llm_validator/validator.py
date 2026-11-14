@@ -2,7 +2,13 @@ from llm_validator.observability import get_stats
 import re
 import json
 from pathlib import Path
-from llm_validator.llm_client import ask_ollama
+
+import os
+if os.getenv("USE_HF_API") == "true":
+    from llm_validator.llm_client_hf import ask_hf as ask_ollama
+else:
+    from llm_validator.llm_client import ask_ollama
+
 from llm_validator.observability import log_validation
 # =========================================================
 # 1. BASELINE: Keyword-based faithfulness (our first attempt)
