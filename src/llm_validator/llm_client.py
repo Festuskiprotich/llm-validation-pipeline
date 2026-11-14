@@ -27,7 +27,7 @@ def ask_ollama(prompt: str, model: str = "qwen2.5:3b") -> dict:
     start_time = time.time()
     
     # Send the HTTP POST request to Ollama
-    with httpx.Client(timeout=60.0) as client:
+    with httpx.Client(timeout=300.0) as client:
         response = client.post(url, json=payload)
         response.raise_for_status() # Throws an error if the server failed
         
